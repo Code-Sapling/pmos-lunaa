@@ -1,0 +1,3 @@
+#!/bin/sh
+rc-update add lunaa-wifi default 2>/dev/null || true
+exit 0

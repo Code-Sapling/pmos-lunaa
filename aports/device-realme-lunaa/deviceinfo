@@ -1,0 +1,64 @@
+# Reference: <https://postmarketos.org/deviceinfo>
+# Please use double quotes only. You can source this file in shell
+# scripts.
+
+deviceinfo_format_version="0"
+deviceinfo_name="Realme GT Master Edition"
+deviceinfo_manufacturer="Realme"
+deviceinfo_codename="realme-lunaa"
+deviceinfo_year="2021"
+deviceinfo_arch="aarch64"
+
+# Device related
+deviceinfo_chassis="handset"
+deviceinfo_drm="true"
+deviceinfo_screen_width="1080"
+deviceinfo_screen_height="2400"
+
+# Bootloader related
+deviceinfo_flash_method="fastboot"
+deviceinfo_generate_bootimg="true"
+deviceinfo_header_version="3"
+deviceinfo_bootimg_qcdt="false"
+deviceinfo_flash_pagesize="4096"
+
+# boot-deploy's header v3 path passes NO --base/offsets to mkbootimg, so it
+# falls back to mkbootimg's own default of --base 0x10000000 and writes
+# base+offset into the vendor_boot header (mkbootimg.py:158-176). That put the
+# kernel at 0x10008000 instead of the stock 0x00008000 -- every load address
+# 0x10000000 too high -- and the device hung at the boot logo with no USB.
+# deviceinfo_flash_offset_* are NOT consulted on this path; only these custom
+# args are. The four offsets already match mkbootimg's defaults, so pinning
+# base to 0 reproduces the stock header exactly.
+deviceinfo_bootimg_custom_args="--base 0x00000000"
+
+# UFS: the stock partitions use 4096-byte logical sectors.
+deviceinfo_rootfs_image_sector_size="4096"
+
+# Pinned explicitly rather than left to the default. This kernel is 5.4 and
+# has no CONFIG_RD_ZSTD (added in 5.9), so a zstd initramfs would be
+# undecompressable -> silent hang with no way to observe it on this device.
+deviceinfo_initfs_compression="gzip"
+
+# With header_version=3, boot-deploy calls mkbootimg so that boot.img gets
+# ONLY the kernel, while the initramfs, the cmdline and the dtb all go into
+# vendor_boot.img. Both images must therefore be flashed; leaving the stock
+# vendor_boot in place would boot our kernel with Android's ramdisk.
+#
+# deviceinfo_dtb points at LineageOS' own multi-DTB blob (17 concatenated
+# FDTs), extracted verbatim from the stock vendor_boot. Reusing it byte for
+# byte keeps ABL's qcom,msm-id/board-id matching and the stock dtbo overlays
+# valid, so our vendor_boot differs from the known-booting one only in the
+# ramdisk and the cmdline.
+deviceinfo_dtb="lunaa-yupik"
+deviceinfo_append_dtb="false"
+
+# LineageOS' stock vendor_boot cmdline, verbatim. Since we replace
+# vendor_boot, these are no longer supplied by the stock image and have to be
+# carried over. PMOS_NO_OUTPUT_REDIRECT keeps boot messages on the
+# framebuffer; this device has no serial console and pstore records nothing.
+deviceinfo_kernel_cmdline="androidboot.hardware=qcom androidboot.memcg=1 androidboot.usbcontroller=a600000.dwc3 cgroup.memory=nokmem,nosocket loop.max_part=7 lpm_levels.sleep_disabled=1 msm_rtb.filter=0x237 pcie_ports=compat service_locator.enable=1 swiotlb=0 ip6table_raw.raw_before_defrag=1 iptable_raw.raw_before_defrag=1"
+
+deviceinfo_flash_fastboot_partition_kernel="boot"
+deviceinfo_flash_fastboot_partition_vendor_boot="vendor_boot"
+deviceinfo_flash_fastboot_partition_rootfs="userdata"

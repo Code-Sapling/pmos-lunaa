@@ -1,0 +1,41 @@
+# Proprietary firmware extracted from the stock LineageOS 20 ROM for lunaa.
+# NOT redistributable -- this aport exists so a local `pmbootstrap install`
+# reproduces a working device. It can never go upstream to pmaports.
+#
+# Rebuild the tarball with:
+#   payload-dumper-go -p vendor,modem,odm lineage-20.0-*-lunaa.zip
+# then take /firmware from vendor.img, image/{wpss,adsp,cdsp,qca6750} from
+# modem.img, and vendor/etc/wifi/WCNSS_qcom_cfg.ini from odm.img.
+pkgname=firmware-realme-lunaa
+pkgver=1
+pkgrel=0
+pkgdesc="Proprietary firmware for Realme GT Master Edition (from stock ROM)"
+url="https://postmarketos.org"
+arch="aarch64"
+license="proprietary"
+options="!check !strip !archcheck !tracedeps !spdx pmb:cross-native"
+source="lunaa-firmware.tar.gz
+	00-lunaa-firmware.files
+	"
+builddir="$srcdir"
+
+package() {
+	# /lib/firmware: IPA (yupik_ipa_fws), Venus (vpu20_1v), Adreno zap shader
+	# (a660_zap), ADSP/CDSP, and the WCN6750 wifi set (wpss + qca6750 board
+	# data + WCNSS_qcom_cfg.ini).
+	mkdir -p "$pkgdir"/lib/firmware
+	cp -a "$srcdir"/fwstage/. "$pkgdir"/lib/firmware/
+
+	# icnss2 asks for these by bare name; they are also kept under qca6750/.
+	# Nothing to do -- both copies are in the tarball.
+
+	# The IPA firmware is requested at ~0.77s, before the rootfs is mounted,
+	# so it must also live inside the initramfs or it can never load with a
+	# short /sys/class/firmware/timeout.
+	install -Dm644 "$srcdir"/00-lunaa-firmware.files \
+		"$pkgdir"/usr/share/mkinitfs/files/00-lunaa-firmware.files
+}
+sha512sums="
+7dd09d29f9967c7dba48b3de5b2e2eb73f080a3ae75c10be9ca076e27cab89f17397a87bc699b9c08f73bd1bd366ffe24d5dfe52eb3dc53ad233db478d268f8c  lunaa-firmware.tar.gz
+dc940a4d68a997ab752cb1a374e8ffad03b4c844264e64eab205968f4e27179762855c6757d91d2f71ba9147173e6c3dc249dac1c41df308ab18133a9f454b0e  00-lunaa-firmware.files
+"

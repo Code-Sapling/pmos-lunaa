@@ -1,0 +1,15 @@
+#!/sbin/openrc-run
+description="Bring up WCN6750 wifi (wpss + qcacld ON trigger)"
+
+depend() {
+	need localmount
+	before networkmanager wpa_supplicant
+}
+
+start() {
+	ebegin "Starting WCN6750 wifi bring-up (backgrounded)"
+	# Backgrounded: the ON write blocks ~30s on icnss2's DMS timeout and
+	# must not hold up the boot.
+	/usr/bin/lunaa-wifi-up.sh >/dev/null 2>&1 &
+	eend 0
+}

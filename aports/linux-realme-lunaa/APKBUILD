@@ -1,0 +1,121 @@
+# Reference: <https://postmarketos.org/vendorkernel>
+# Kernel config based on: arch/arm64/configs/vendor/lahaina-qgki_defconfig
+#                       + arch/arm64/configs/vendor/oplus_yupik_QGKI.config
+
+maintainer="Abdullah AL-Swedi <abdullahfanar7@gmail.com>"
+pkgname=linux-realme-lunaa
+pkgver=5.4.242
+pkgrel=3
+pkgdesc="Realme GT Master Edition kernel fork"
+arch="aarch64"
+_carch="arm64"
+_flavor="realme-lunaa"
+url="https://kernel.org"
+license="GPL-2.0-only"
+options="!strip !check !tracedeps pmb:cross-native"
+makedepends="
+	bash
+	kmod
+	bc
+	bison
+	coreutils
+	devicepkg-dev
+	findutils
+	flex
+	openssl-dev
+	perl
+	xz
+"
+
+# coreutils: techpack/camera/drivers/Makefile does
+#     cam_include_dirs := $(shell dirname `find $(cameratree) -name '*.h'` | uniq)
+# which passes every header path to dirname at once. GNU dirname accepts many
+# arguments; busybox dirname takes exactly one, exits 1 and prints usage, so
+# cam_include_dirs comes out empty and the build dies on a missing
+# cam_debug_util.h. Alpine's coreutils replaces /usr/bin/dirname.
+#
+# xz: kernel/Makefile's kheaders_data.tar.xz target (CONFIG_IKHEADERS) shells
+# out to xz, which is not in the base chroot.
+
+# Source
+# Pinned to the exact commit that LineageOS 20 for lunaa was built from:
+# the device reports "5.4.242-qgki-ga04ba60c4d6c". This commit is no longer
+# reachable from any branch head (the branch was rebased since), but GitHub
+# still serves it by SHA. Do not bump this to lineage-20 HEAD without a
+# reason: keeping the diff from the known-booting ROM kernel minimal is
+# deliberate.
+_repository="android_kernel_oneplus_sm8350"
+_commit="a04ba60c4d6cb892f72e5415b8dd1a5810393052"
+_config="config-$_flavor.$arch"
+source="
+	$pkgname-$_commit.tar.gz::https://github.com/pjgowtham/$_repository/archive/$_commit.tar.gz
+	$_config
+	0001-touchpanel-set-ABS_MT_WIDTH_MAJOR-range.patch
+"
+builddir="$srcdir/$_repository-$_commit"
+_outdir="out"
+
+prepare() {
+	default_prepare
+	REPLACE_GCCH=0 . downstreamkernel_prepare
+
+	# Disable the camera subsystem. It builds as camera.ko, a module pmOS
+	# will never load for a console-only boot, and it does not build here:
+	#
+	#  - config/yupikcamera.conf (this SoC) does NOT set CONFIG_SPECTRA_OPLUS,
+	#    but the base defconfig is the lahaina one so CONFIG_ARCH_LAHAINA=y as
+	#    well as CONFIG_ARCH_YUPIK=y. techpack/camera/Makefile includes a .conf
+	#    for every enabled arch, so lahainacamera.conf comes in too and it does
+	#    set CONFIG_SPECTRA_OPLUS=y. That pulls in the oplus camera extensions,
+	#    whose ON Semi OIS firmware (LC898124/LC898128) is written with float:
+	#      error: '-mgeneral-regs-only' is incompatible with the use of
+	#      floating-point types
+	#  - Dropping only CONFIG_SPECTRA_OPLUS does not work either: the base
+	#    camera code references those symbols unconditionally, giving ~50
+	#    "undefined!" errors for camera.ko at modpost.
+	#
+	# Use the tree's own supported off switch rather than patching Makefiles.
+	# Re-enabling this is a later problem, once there is a reason to want a
+	# camera; it has no bearing on booting to a shell.
+	sed -i 's/^export CONFIG_SPECTRA_CAMERA=m/export CONFIG_SPECTRA_CAMERA=n/' \
+		"$builddir"/techpack/camera/config/lahainacamera.conf \
+		"$builddir"/techpack/camera/config/yupikcamera.conf
+}
+
+build() {
+	unset LDFLAGS
+	# BRAND_SHOW_FLAG is a make variable that the Android build system
+	# supplies; it is not a Kconfig symbol. LineageOS sets it to "realme"
+	# for lunaa. drivers/power/Makefile uses it to choose between
+	# drivers/power/oplus/ (realme) and drivers/power/oplus_chg/ (oneplus),
+	# and the latter does not compile for this device. arch/arm64/boot/dts/
+	# vendor/Makefile branches on it too.
+	make O="$_outdir" ARCH="$_carch" CC="${CC:-gcc}" \
+		BRAND_SHOW_FLAG=realme \
+		KBUILD_BUILD_VERSION="$((pkgrel + 1 ))-postmarketOS"
+}
+
+package() {
+	# The stock boot.img carries a raw uncompressed Image. Pin it so
+	# downstreamkernel_package does not pick up Image.gz-dtb instead.
+	KERNEL_IMAGE_NAME="Image" downstreamkernel_package \
+		"$builddir" "$pkgdir" "$_carch" "$_flavor" "$_outdir"
+
+	# downstreamkernel_package installs ONLY vmlinuz + kernel.release --
+	# it has no modules_install step. Without this the device boots with
+	# zero modules: no msm_drm.ko (no display), no charger driver (empty
+	# /sys/class/power_supply), no wifi. Everything device-specific in this
+	# QGKI tree is =m, so this is not optional.
+	unset LDFLAGS
+	make -C "$builddir" O="$_outdir" ARCH="$_carch" CC="${CC:-gcc}" \
+		BRAND_SHOW_FLAG=realme \
+		INSTALL_MOD_PATH="$pkgdir" \
+		INSTALL_MOD_STRIP=1 \
+		modules_install
+}
+
+sha512sums="
+56488bbd5f2cc9abff6214d33f8a6d7202e76fda7fce8a68d784b1ab66620b3e04f085baea67eb7afb0b443b289526632096f7fd44dd915be0a14eff868a8f35  linux-realme-lunaa-a04ba60c4d6cb892f72e5415b8dd1a5810393052.tar.gz
+da93ee426e1bb7d8739c994beebeeaad254bcf4c1481a561a36f6c25bcd12a8137275f1b4ac0809464ba0b99a7d78fe914196707575ef5c29a5e70580418067b  config-realme-lunaa.aarch64
+9ee76eb96d1ddbe4a289794e6d29effcb5e05f0af72b60f75cd35025802b7f4cb2fa727513a13d90a5fc35545142d10a566584403a1dc788794e0582811d9b72  0001-touchpanel-set-ABS_MT_WIDTH_MAJOR-range.patch
+"
