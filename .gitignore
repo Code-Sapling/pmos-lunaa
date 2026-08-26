@@ -10,9 +10,10 @@ blobs/fwstage/
 # tools/extract-firmware.sh <lineage-20.0-*-lunaa.zip>.
 blobs/*.tar.gz
 
-# LineageOS' stock multi-DTB blob (8MB), extracted verbatim from a vendor_boot
-# backup. See CLAUDE.md §6. The .sha512 is kept so it can be verified.
-blobs/*.dtb
+# blobs/lunaa-yupik.dtb IS tracked: it is compiled from the kernel's DTS, so
+# it is GPL-2.0 like its source (pinned commit in aports/linux-realme-lunaa),
+# and LineageOS already ships it publicly. Tracking it saves everyone the same
+# extraction. The firmware tarball above is NOT tracked and must not be.
 
 # Compiled init shim -- tools/build-images.sh rebuilds it from finalinit.c
 # whenever it is missing or stale.

@@ -1,0 +1,38 @@
+From: postmarketOS realme-lunaa port
+Subject: [PATCH] media: msm_vidc: advertise V4L2_CAP_VIDEO_M2M_MPLANE
+
+The Venus decoder registers itself as a mem2mem device -- msm_v4l2_vidc.c
+sets vfl_dir = VFL_DIR_M2M two lines earlier -- but omits
+V4L2_CAP_VIDEO_M2M_MPLANE from the capabilities it reports through
+VIDIOC_QUERYCAP:
+
+	device_caps = V4L2_CAP_VIDEO_CAPTURE_MPLANE |
+	              V4L2_CAP_VIDEO_OUTPUT_MPLANE | V4L2_CAP_STREAMING;
+
+Android's video HAL opens the node directly and never queries capabilities,
+so this goes unnoticed downstream. Every generic decoder library checks:
+
+  - ffmpeg's v4l2_m2m wrapper scans /dev/video* and skips any device without
+    V4L2_CAP_VIDEO_M2M_MPLANE or V4L2_CAP_VIDEO_M2M, reporting
+    "Could not find a valid device".
+  - GStreamer's video4linux2 plugin applies the same test when deciding
+    whether to register a v4l2videoNdec element, so none is created.
+
+The result on a mainline-userspace distribution is a fully functional
+decoder that nothing can open. On realme-lunaa /dev/video32 enumerates
+MPEG-2, H.264, HEVC and VP9 on the output queue and NV12 on the capture
+queue, yet both ffmpeg and GStreamer refuse it.
+
+Declare the capability the driver already implements.
+
+--- a/techpack/video/msm/vidc/msm_v4l2_vidc.c	2026-08-26 23:15:18.224321251 +0300
++++ b/techpack/video/msm/vidc/msm_v4l2_vidc.c	2026-08-26 23:15:18.232219758 +0300
+@@ -444,7 +444,7 @@
+ 	core->vdev[sess_type].vdev.v4l2_dev = &core->v4l2_dev;
+ 	core->vdev[sess_type].vdev.device_caps =
+ 		V4L2_CAP_VIDEO_CAPTURE_MPLANE | V4L2_CAP_VIDEO_OUTPUT_MPLANE |
+-		V4L2_CAP_STREAMING;
++		V4L2_CAP_VIDEO_M2M_MPLANE | V4L2_CAP_STREAMING;
+ 	rc = video_register_device(&core->vdev[sess_type].vdev,
+ 					VFL_TYPE_GRABBER, nr);
+ 	if (rc) {

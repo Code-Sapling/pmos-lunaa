@@ -1029,3 +1029,8 @@ CONFIG_FRAMEBUFFER_CONSOLE=y
 # NOT set, and deliberately so: CONFIG_RD_ZSTD / CONFIG_DECOMPRESS_ZSTD do
 # not exist in Linux 5.4 (added in 5.9). kconfig check flags them, but
 # deviceinfo_initfs_compression is pinned to gzip, which RD_GZIP covers.
+
+# Enable debugfs: /sys/kernel/debug/devices_deferred names what each
+# deferred device is waiting on, and /sys/kernel/debug/asoc/ exposes the
+# ASoC component list. Both were sorely missed during audio bring-up.
+CONFIG_DEBUG_FS=y

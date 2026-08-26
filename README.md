@@ -3,16 +3,34 @@
 Downstream port on the LineageOS 20 kernel (5.4.242 QGKI, SM7325 "yupik").
 
 **Working:** boot to sxmo/sway in ~30s, display 1080x2400 @ 120Hz, touchscreen,
-power/volume buttons, audio, **wifi**, **battery and charging**, **GPU
-acceleration** (Vulkan via turnip on KGSL), USB networking, SSH, IPA, Venus and
-Adreno firmware.
+power/volume buttons, **wifi**, **battery and charging**, **GPU acceleration**
+(Vulkan via turnip on KGSL), USB networking, SSH, IPA, Venus and Adreno
+firmware.
 
-**Not working:** camera (`CONFIG_SPECTRA_CAMERA=n`, needed to make the kernel
-build), cellular (no modem driver), X11 (Xorg segfaults in glamor init —
-Wayland only).
+**Not working:** audio (the ASoC card does not finish probing — see below),
+camera (`CONFIG_SPECTRA_CAMERA=n`, needed to make the kernel build), cellular
+(no modem driver), haptics (`aw8697` panics on probe), X11 (Xorg segfaults in
+glamor init — Wayland only).
 
 This is the first Linux of any kind to run on this model — the pmOS wiki still
 lists the device as non-booting.
+
+**The only UI tested here is `sxmo-de-sway`.** Nothing else has been tried.
+Other wlroots compositors have a reasonable chance of working since the
+renderer setting lives in the main device package, but that is untested;
+anything needing X11 will not work.
+
+## Where the pieces come from
+
+| Piece | Source |
+|---|---|
+| Kernel | [`pjgowtham/android_kernel_oneplus_sm8350`](https://github.com/pjgowtham/android_kernel_oneplus_sm8350), pinned to the exact commit LineageOS 20 was built from (`a04ba60c4d6c`) — see `aports/linux-realme-lunaa/APKBUILD` |
+| Android device tree | [`pjgowtham/android_device_realme_lunaa`](https://github.com/pjgowtham/android_device_realme_lunaa), branch `lineage-20` |
+| Firmware + DTB | Extracted from a stock LineageOS 20 zip built from those trees |
+
+The kernel repo is the one declared by the common tree's `lineage.dependencies`
+— note `oneplus`, not `oplus`; the similarly named `android_kernel_oplus_sm8350`
+is a different device entirely.
 
 See **[CLAUDE.md](CLAUDE.md)** for the full technical record: every finding,
 every dead end, and why each workaround exists. Read §4 first.
@@ -37,11 +55,18 @@ tools/extract-firmware.sh ~/Downloads/lineage-20.0-*-lunaa.zip
 Produces `blobs/lunaa-firmware.tar.gz` (~19MB). Without it there is no wifi, no
 battery, no hardware video decode and no IPA.
 
-### 2. The device tree blob
+### 2. The device tree blob — already here
 
-`blobs/lunaa-yupik.dtb` is LineageOS's stock multi-DTB blob, extracted verbatim
-from a `vendor_boot` backup. See CLAUDE.md §6 for the extraction snippet —
-it is 8MB and device-specific, so it is not committed either.
+`blobs/lunaa-yupik.dtb` **is committed**, so there is nothing to do. It is
+LineageOS's stock multi-DTB blob (17 concatenated FDTs, 8MB), compiled from the
+kernel's DTS and therefore GPL-2.0 like its source — which is the pinned commit
+in `aports/linux-realme-lunaa/APKBUILD`. Everyone was extracting the identical
+file, so it is tracked rather than reproduced. `blobs/lunaa-yupik.dtb.sha512`
+verifies it; CLAUDE.md §6 has the extraction snippet if you want to rebuild it
+from your own `vendor_boot` backup.
+
+The firmware tarball is a different matter and stays out: it is proprietary
+Qualcomm and OPlus code that nobody here has the right to redistribute.
 
 ### 3. Configure and install the aports
 
@@ -56,12 +81,6 @@ pmbootstrap checksum linux-realme-lunaa device-realme-lunaa firmware-realme-luna
 where they live as **untracked** files — a `pmbootstrap pull` or a stray
 `git clean` deletes them. Re-run it after any pmaports update. It also installs
 the local `mesa` aport as `temp/mesa`, shadowing Alpine's.
-
-Add the sxmo config subpackage to `~/.config/pmbootstrap_v3.cfg`:
-
-```
-extra_packages = openssh,device-realme-lunaa-sxmo
-```
 
 ### 4. Build and flash
 
@@ -85,11 +104,11 @@ Then `ssh <user>@172.16.42.1` once the host gets 172.16.42.2 over USB.
 
 ---
 
-## Two kernel patches this port needs
+## Three kernel patches this port needs
 
-Both are in `aports/linux-realme-lunaa/` and both fix the touchscreen, in
-different ways. Neither is device-specific — they affect the whole
-oplus/OnePlus/Realme SM8350/SM7325 family under any Wayland compositor.
+All in `aports/linux-realme-lunaa/`. None is device-specific — each affects the
+whole oplus/OnePlus/Realme SM8350/SM7325 family under any Wayland compositor,
+and each is a fact the vendor's own userspace never needed the kernel to state.
 
 - **`0001-touchpanel-set-ABS_MT_WIDTH_MAJOR-range.patch`** —
   `oplus_touchscreen_v2` declares five `ABS_MT` axes and ranges only three, so
@@ -100,6 +119,10 @@ oplus/OnePlus/Realme SM8350/SM7325 family under any Wayland compositor.
   driven by the legacy DRM DPMS property, which atomic-only wlroots never sets.
   So the first screen blank suspends the touch controller and nothing resumes
   it — touch is dead until reboot.
+- **`0003-msm-vidc-advertise-the-M2M-capability.patch`** — the Venus decoder
+  sets `vfl_dir = VFL_DIR_M2M` but omits `V4L2_CAP_VIDEO_M2M_MPLANE` from the
+  capabilities it reports. ffmpeg and GStreamer both skip any device without
+  that bit, so a working decoder is invisible to every generic userspace.
 
 ## Three things Android's userspace does and pmOS does not
 
@@ -149,7 +172,8 @@ own header spells out the pixman fallback.
 ```
 aports/     the four local aports: linux-, device-, firmware-realme-lunaa
             and mesa (real copies; pmaports holds untracked ones)
-blobs/      stock DTB and firmware tarball -- generated, not committed
+blobs/      lunaa-yupik.dtb (tracked); firmware tarball (generated, never
+            committed -- proprietary)
 tools/      build-images.sh, extract-firmware.sh, install-aports.sh,
             finalinit.c (init shim), rescue-shell.c, vkprobe.c
 out/        generated boot.img / vendor_boot.img
@@ -169,3 +193,37 @@ Three real bugs affecting other hardware, none needing the proprietary blobs:
 
 The qcacld `ON` trigger and the `boot_adsp` write are worth writing up too: both
 are known in Halium/Droidian circles but undocumented for pmOS.
+
+## The packages this builds
+
+| Package | Contents |
+|---|---|
+| `linux-realme-lunaa` | The kernel, pinned commit plus three patches |
+| `device-realme-lunaa` | deviceinfo, DTB, wifi and ADSP services, udev rules, renderer setting |
+| `device-realme-lunaa-sxmo` | **Subpackage.** sxmo's deviceprofile only — display scale, monitor name, `SXMO_NO_MODEM`, state machine |
+| `firmware-realme-lunaa` | Your extracted blobs (built in step 1, never redistributed) |
+| `mesa` | Local override of Alpine's, for turnip's KGSL backend |
+
+The sxmo split is deliberate: the main package alone gives a working device
+under any Wayland UI, while the subpackage holds settings that are pure sxmo
+configuration and would be dead weight elsewhere. It is not pulled in
+automatically — add it to `~/.config/pmbootstrap_v3.cfg`:
+
+```
+extra_packages = openssh,device-realme-lunaa-sxmo
+```
+
+## A note on how this port was built
+
+Much of the analysis and debugging here was done with Claude (Anthropic's LLM)
+reading kernel source, device trees and logs. Every hardware operation —
+flashing, booting, capturing the logs that any of it was inferred from — was
+done by a human, and nothing is recorded as working unless it was observed
+working on the device.
+
+That collaboration is why `CLAUDE.md` is as long as it is: it exists so the
+reasoning behind each workaround survives, not just the workaround. Treat both
+files as a record of what was tested, and be suspicious of anything in them
+that is not backed by a quoted log line — several confident-sounding claims in
+earlier revisions turned out to be wrong, and the corrections are noted in
+place.

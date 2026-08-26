@@ -5,7 +5,7 @@
 maintainer="Abdullah AL-Swedi <abdullahfanar7@gmail.com>"
 pkgname=linux-realme-lunaa
 pkgver=5.4.242
-pkgrel=4
+pkgrel=5
 pkgdesc="Realme GT Master Edition kernel fork"
 arch="aarch64"
 _carch="arm64"
@@ -52,6 +52,7 @@ source="
 	$_config
 	0001-touchpanel-set-ABS_MT_WIDTH_MAJOR-range.patch
 	0002-dsi-display-notify-UNBLANK-on-enable.patch
+	0003-msm-vidc-advertise-the-M2M-capability.patch
 "
 builddir="$srcdir/$_repository-$_commit"
 _outdir="out"
@@ -117,7 +118,8 @@ package() {
 
 sha512sums="
 56488bbd5f2cc9abff6214d33f8a6d7202e76fda7fce8a68d784b1ab66620b3e04f085baea67eb7afb0b443b289526632096f7fd44dd915be0a14eff868a8f35  linux-realme-lunaa-a04ba60c4d6cb892f72e5415b8dd1a5810393052.tar.gz
-da93ee426e1bb7d8739c994beebeeaad254bcf4c1481a561a36f6c25bcd12a8137275f1b4ac0809464ba0b99a7d78fe914196707575ef5c29a5e70580418067b  config-realme-lunaa.aarch64
+a5cf4315915e245a7f8f83e646b4e30ba8921369e1fb4592749b49ef67e772dce3f47f852fcfb70b3aae9b4c75864aa0d0b765b34675eb83adcd4fdeca113a5a  config-realme-lunaa.aarch64
 9ee76eb96d1ddbe4a289794e6d29effcb5e05f0af72b60f75cd35025802b7f4cb2fa727513a13d90a5fc35545142d10a566584403a1dc788794e0582811d9b72  0001-touchpanel-set-ABS_MT_WIDTH_MAJOR-range.patch
 ce91f3c307db96d5d1486251f468b5be0c0a9b1d0d416a6f33b5118ee42a62cd1065835d75cf0011286cdd90cf1c500bcacde119477ed2bb5cd6524fb540130e  0002-dsi-display-notify-UNBLANK-on-enable.patch
+568dffdb405c1d4208d35f8240ce516eba8ee12da4c00aea3bc27f155f2f409e341edbf65c470a296fc60b6eefe8ddf7b7dc62be2b2285fda4cb7a2ac33dbb86  0003-msm-vidc-advertise-the-M2M-capability.patch
 "
