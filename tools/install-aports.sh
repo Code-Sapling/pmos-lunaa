@@ -6,7 +6,8 @@
 # aports/ are the real ones; re-run this after any pmaports update.
 set -e
 SRC="$(CDPATH= cd -- "$(dirname -- "$0")/../aports" && pwd)"
-DST="${PMAPORTS:-$HOME/.local/var/pmbootstrap/cache_git/pmaports}/device/downstream"
+PMAPORTS="${PMAPORTS:-$HOME/.local/var/pmbootstrap/cache_git/pmaports}"
+DST="$PMAPORTS/device/downstream"
 
 [ -d "$DST" ] || { echo "pmaports not found at $DST (set PMAPORTS=)"; exit 1; }
 
@@ -15,6 +16,13 @@ for pkg in linux-realme-lunaa device-realme-lunaa firmware-realme-lunaa; do
 	cp -a "$SRC/$pkg/." "$DST/$pkg/"
 	echo "installed $pkg"
 done
+
+# mesa is not a device package -- it is a local override of Alpine's main/mesa
+# (turnip's KGSL backend, see its APKBUILD header). pmaports puts packages that
+# shadow Alpine ones under temp/.
+mkdir -p "$PMAPORTS/temp/mesa"
+cp -a "$SRC/mesa/." "$PMAPORTS/temp/mesa/"
+echo "installed mesa (temp/mesa)"
 
 # Two large generated files are deliberately not kept in aports/:
 #   lunaa-yupik.dtb        -> blobs/ (extract from the stock vendor_boot, §6)

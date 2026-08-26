@@ -1,0 +1,127 @@
+From: pmos-lunaa <local>
+Subject: [PATCH] tu/kgsl: advertise VK_EXT_physical_device_drm using the display node
+
+LOCAL PATCH for realme-lunaa (SM7325 / Adreno 642L behind KGSL). See the
+caveat at the bottom -- not upstreamable as written.
+
+On downstream Qualcomm kernels the Adreno sits behind KGSL (/dev/kgsl-3d0) and
+has no DRM node of its own; /dev/dri/renderD128 belongs to the *display*
+driver (msm_drm/SDE). Turnip therefore disables VK_EXT_physical_device_drm on
+KGSL, having no DRM major/minor to report.
+
+The consequence is that nothing can select the GPU. Every Vulkan consumer that
+pairs a Vulkan device with a DRM fd does it through exactly this extension:
+
+  - wlroots 0.20 render/vulkan/vulkan.c:351 matches drmRenderMajor/Minor
+    against the DRM fd and logs "VK_EXT_physical_device_drm not supported",
+    so WLR_RENDERER=vulkan fails.
+  - zink zink_screen.c:1707 does the same match in zink_get_display_device()
+    and leaves screen->pdev NULL, so GL-on-Vulkan fails too.
+
+Neither offers an override, and it cascades: with no accelerated compositor
+there is no linux-dmabuf advertised to clients, so even plain Vulkan apps
+cannot present.
+
+There is exactly one DRM device on such a system, and rendered buffers really
+do go to it for scanout, as ION dmabufs which the KGSL backend can already
+export (VK_KHR_external_memory_fd is supported). So reporting the display
+node's numbers answers the question those consumers are actually asking:
+"which DRM device do I share buffers with for this GPU".
+
+Caveat, and why this is not upstreamable as-is: the association is a
+convenient fiction -- the GPU is not that DRM device. With more than one DRM
+device present this picks an arbitrary one. Upstream would rather teach the
+consumers to cope with a GPU that has no DRM node at all.
+
+--- a/src/freedreno/vulkan/tu_device.cc	2026-07-29 20:31:27.000000000 +0300
++++ b/src/freedreno/vulkan/tu_device.cc	2026-08-26 14:56:43.843945404 +0300
+@@ -314,7 +314,11 @@
+       .EXT_mutable_descriptor_type = true,
+       .EXT_nested_command_buffer = true,
+       .EXT_non_seamless_cube_map = true,
+-      .EXT_physical_device_drm = !is_kgsl(device->instance),
++      /* On KGSL this is populated from the display DRM node rather than
++       * from a GPU node, so that wlroots and zink can pair the two. The
++       * fields stay zeroed (drmHasRender false) if none is found.
++       */
++      .EXT_physical_device_drm = true,
+       .EXT_pipeline_creation_cache_control = true,
+       .EXT_pipeline_creation_feedback = true,
+ #ifdef TU_USE_WSI_PLATFORM
+--- a/src/freedreno/vulkan/tu_knl_kgsl.cc	2026-07-29 20:31:27.000000000 +0300
++++ b/src/freedreno/vulkan/tu_knl_kgsl.cc	2026-08-26 15:06:26.582365770 +0300
+@@ -5,7 +5,10 @@
+ 
+ #include <errno.h>
+ #include <fcntl.h>
++#include <dirent.h>
+ #include <linux/dma-heap.h>
++#include <sys/stat.h>
++#include <sys/sysmacros.h>
+ #include <poll.h>
+ #include <stdint.h>
+ #include <sys/ioctl.h>
+@@ -1778,6 +1781,54 @@
+    return value;
+ }
+ 
++/* KGSL has no DRM node of its own. Find the DRM device that is present -- on
++ * these downstream Qualcomm kernels that is the display driver (msm_drm/SDE)
++ * -- and report its major/minor as ours, so consumers that pair a Vulkan
++ * device with a DRM fd (wlroots, zink) can select us. See the patch header
++ * for why this association is a deliberate fiction.
++ */
++static void
++tu_kgsl_fill_drm_props(struct tu_physical_device *device)
++{
++   static const char dri_dir[] = "/dev/dri";
++   struct dirent *ent;
++   struct stat st;
++   char buf[64];
++   DIR *dir;
++
++   device->has_master = false;
++   device->has_local = false;
++
++   dir = opendir(dri_dir);
++   if (!dir)
++      return;
++
++   while ((ent = readdir(dir))) {
++      bool render = !strncmp(ent->d_name, "renderD", 7);
++      bool card = !strncmp(ent->d_name, "card", 4);
++
++      if (!render && !card)
++         continue;
++      if (snprintf(buf, sizeof(buf), "%s/%s", dri_dir, ent->d_name) >=
++          (int) sizeof(buf))
++         continue;
++      if (stat(buf, &st) != 0)
++         continue;
++
++      if (render && !device->has_local) {
++         device->has_local = true;
++         device->local_major = major(st.st_rdev);
++         device->local_minor = minor(st.st_rdev);
++      } else if (card && !device->has_master) {
++         device->has_master = true;
++         device->master_major = major(st.st_rdev);
++         device->master_minor = minor(st.st_rdev);
++      }
++   }
++
++   closedir(dir);
++}
++
+ VkResult
+ tu_knl_kgsl_load(struct tu_instance *instance, int fd)
+ {
+@@ -1794,6 +1845,8 @@
+       return vk_error(instance, VK_ERROR_OUT_OF_HOST_MEMORY);
+    }
+ 
++   tu_kgsl_fill_drm_props(device);
++
+    static const char dma_heap_path[] = "/dev/dma_heap/system";
+    static const char ion_path[] = "/dev/ion";
+    int dma_fd;
