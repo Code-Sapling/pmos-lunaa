@@ -1,0 +1,91 @@
+From: postmarketOS realme-lunaa port
+Subject: [PATCH] drm/msm/dsi: send an UNBLANK panel notification from
+ dsi_display_enable()
+
+The panel blank notifications this tree sends to the touchscreen driver are
+asymmetric: the POWERDOWN half is emitted from the generic DRM path, the
+UNBLANK half only from an OPlus-specific one.
+
+  - dsi_display_disable() emits MSM_DRM_BLANK_POWERDOWN (EARLY_EVENT_BLANK on
+    entry, EVENT_BLANK on exit), on both the msm_drm and drm_panel chains.
+  - dsi_display_enable() emits nothing at all.
+  - The only MSM_DRM_BLANK_UNBLANK on the drm_panel chain comes from
+    dsi_display_oplus_set_power() (techpack/display/oplus/
+    oplus_display_private_api.c), reached via _sde_connector_update_power_locked()
+    when the legacy DRM DPMS connector property changes.
+  - The generic notifier call in sde_kms.c that would have covered both
+    directions is compiled out under #ifndef OPLUS_BUG_STABILITY.
+
+Android's HWC sets that DPMS property, so downstream never notices. wlroots
+has been atomic-only since 0.18: it toggles CRTC ACTIVE and never touches the
+legacy property, so on a mainline-userspace distribution the UNBLANK is never
+sent.
+
+The oplus touchscreen driver registers on the drm_panel chain
+(touchpanel_common_driver.c, CONFIG_DRM_OPLUS_PANEL_NOTIFY branch) and drives
+tp_suspend()/tp_resume() from it. The result is that the first screen blank
+suspends the touch controller and nothing ever resumes it -- the panel comes
+back, but the touchscreen is dead until reboot, with no error anywhere:
+
+  [   93.506928] [TP0]touchpanel: fb_notifier_callback: event = 2, blank = 1
+  [   93.637229] [TP0]touchpanel: fb_notifier_callback: event = 1, blank = 1
+  [   93.637232] [TP0]touchpanel: tp_suspend: start.
+  [   93.644814] [TP0]touchpanel: tp_suspend: end.
+  <screen switched back on -- nothing further is logged>
+
+Mirror dsi_display_disable(): send EARLY_EVENT_BLANK/UNBLANK on the way in and
+EVENT_BLANK/UNBLANK on the way out, on both chains.
+
+The early notification is placed after the continuous-splash block rather than
+at the top of the function. That block has two early returns of its own, and
+sending EARLY without a matching EVENT is not harmless: under
+tp_resume_order == LCD_TP_RESUME, lcd_on_early_event() calls
+disable_irq_nosync() and only lcd_on_event() re-enables it. Below the block,
+every path that sends EARLY also reaches the exit label that sends EVENT.
+
+--- a/techpack/display/msm/dsi/dsi_display.c	2026-08-26 19:03:31.401959882 +0300
++++ b/techpack/display/msm/dsi/dsi_display.c	2026-08-26 19:04:37.831300922 +0300
+@@ -8897,6 +8897,10 @@
+ {
+ 	int rc = 0;
+ 	struct dsi_display_mode *mode;
++#ifdef CONFIG_DRM_OPLUS_PANEL_NOTIFY
++	int blank;
++	struct msm_drm_notifier notifier_data;
++#endif
+ 
+ 	if (!display || !display->panel) {
+ 		DSI_ERR("Invalid params\n");
+@@ -8943,6 +8947,17 @@
+ 		return 0;
+ 	}
+ 
++#ifdef CONFIG_DRM_OPLUS_PANEL_NOTIFY
++	blank = MSM_DRM_BLANK_UNBLANK;
++	notifier_data.data = &blank;
++	notifier_data.id = 0;
++	msm_drm_notifier_call_chain(MSM_DRM_EARLY_EVENT_BLANK,
++					&notifier_data);
++	drm_panel_notifier_call_chain(&display->panel->drm_panel,
++					MSM_DRM_EARLY_EVENT_BLANK,
++					&notifier_data);
++#endif
++
+ 	mutex_lock(&display->display_lock);
+ 
+ 	mode = display->panel->cur_mode;
+@@ -9036,6 +9051,14 @@
+ 	}
+ #endif
+ 
++#ifdef CONFIG_DRM_OPLUS_PANEL_NOTIFY
++	msm_drm_notifier_call_chain(MSM_DRM_EVENT_BLANK,
++					&notifier_data);
++	drm_panel_notifier_call_chain(&display->panel->drm_panel,
++					MSM_DRM_EVENT_BLANK,
++					&notifier_data);
++#endif
++
+ 	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT);
+ 	return rc;
+ }

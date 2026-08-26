@@ -672,6 +672,130 @@ installed even after `rc-update del modemmanager`. It then starts
 `sxmo_modemmonitor` against a dead DBus service **and takes a 120-second
 wakelock** to "let the modem warm up". There is no modem driver on this port.
 
+### ⚠️ Touch dies after the first screen blank — kernel patch required
+
+**Confirmed and fixed on hardware 2026-08-26.** Blank the screen (idle or a
+power press), wake it, and the touchscreen is dead until reboot. Display,
+buttons, wifi and ssh all keep working, so it reads as a userspace input
+problem. It is not one.
+
+`0002-dsi-display-notify-UNBLANK-on-enable.patch` in
+`aports/linux-realme-lunaa/` fixes it.
+
+**The bug.** The panel blank notifications this tree sends to the touchscreen
+driver are asymmetric:
+
+| Direction | Emitted from | Fires under pmOS? |
+|---|---|---|
+| `POWERDOWN` | `dsi_display_disable()`, `dsi_display.c:9183` — generic DRM path | **yes** |
+| `UNBLANK` | only `dsi_display_oplus_set_power()`, `oplus_display_private_api.c:3004` | **no** |
+
+`dsi_display_enable()` emits nothing at all, and the generic notifier call in
+`sde_kms.c:1005` that would have covered both directions is compiled out under
+`#ifndef OPLUS_BUG_STABILITY` — OPlus moved the job to their own path.
+
+`dsi_display_oplus_set_power()` only runs via
+`_sde_connector_update_power_locked()` (`sde_connector.c:864`), driven by the
+legacy DRM **DPMS connector property**. Android's HWC sets that property.
+wlroots has been atomic-only since 0.18 — it toggles `CRTC ACTIVE` and never
+touches the legacy property. So the UNBLANK is never sent under any Wayland
+compositor. (Note that function's `SDE_MODE_DPMS_OFF` case is
+`default: return rc;` — it emits nothing either.)
+
+With `CONFIG_DRM_OPLUS_PANEL_NOTIFY=y` the touch driver registers on the
+**drm_panel** chain (`touchpanel_common_driver.c:3167`) and drives
+`tp_suspend()`/`tp_resume()` from it. Net effect: the first blank suspends the
+touch controller and nothing ever resumes it.
+
+**The dmesg signature** — `blank = 1` is POWERDOWN, `blank = 0` is UNBLANK:
+
+```
+[   93.506928] [TP0]touchpanel: fb_notifier_callback: event = 2, blank = 1
+[   93.637229] [TP0]touchpanel: fb_notifier_callback: event = 1, blank = 1
+[   93.637232] [TP0]touchpanel: tp_suspend: start.
+<screen switched back on -- nothing further is logged>
+```
+
+After the patch, waking logs `blank = 0` and `tp_resume: start.`
+
+**`/sys/kernel/oplus_display/notify_panel_blank` is a dead end.** It looks like
+the obvious userspace lever, but its handler
+(`oplus_display_private_api.c:2350`) only pokes the `msm_drm` chain, and the
+touch driver is on the `drm_panel` one.
+
+**Deploying this costs no flash cycle.** `dsi_display.c` builds into
+`msm_drm.ko`, and `modules-initfs` is empty, so that module loads from the
+rootfs. Same source and config means vermagic and all 737 imported symbol CRCs
+are unchanged — verify with `modprobe --dump-modversions` on old and new before
+trusting it — so the rebuilt `.ko` is a drop-in:
+
+```sh
+M=/lib/modules/5.4.242-qgki/kernel/techpack/display/msm/msm_drm.ko
+sudo cp $M $M.bak && sudo cp /tmp/msm_drm.ko $M && sudo depmod -a 5.4.242-qgki
+sudo reboot     # rmmod msm_drm would take the compositor with it
+```
+
+That is a live test only — apk still records the old pkgrel, so an upgrade
+reverts it. The patch is in the aport, so the next `pmbootstrap install` +
+flash carries it properly.
+
+### sxmo: `SXMO_STATES="unlock screenoff"` in the deviceprofile
+
+Separate from the bug above, and **not** the cause of it — this was chased first
+and was a red herring, so read the kernel section above before suspecting sxmo.
+
+sxmo's default state machine is `unlock lock screenoff`, and the middle state
+means *screen on, touch deliberately disabled* — `sxmo_hook_lock.sh` runs
+`sxmo_wm.sh inputevent touchscreen off`, i.e.
+`swaymsg "input type:touch events disabled"`. A power press moves exactly one
+state back (`sxmo_hook_inputhandler.sh` → `sxmo_state.sh click`), so waking from
+`screenoff` lands in `lock`, not `unlock`; a second press reaches `unlock`.
+`sxmo_state.sh:9-16` drops the middle state automatically when `peanutbutter` or
+`smlock` is installed. The deviceprofile forces the two-state form so one power
+press wakes straight into a usable session.
+
+To tell the two apart in one line, over ssh while touch is dead:
+
+```sh
+. /etc/profile.d/sxmo_init.sh; sxmo_state.sh get
+swaymsg -t get_inputs | jq -r '.[]|select(.type=="touch")|.libinput.send_events'
+```
+
+`lock` + `disabled` is sxmo. `unlock` + `enabled` with touch still dead is the
+kernel bug — and `evtest /dev/input/event3` showing nothing at all settles it.
+
+**`sxmo_state.sh` does not work over ssh.** `sxmo_init.sh` deliberately does not
+export `WAYLAND_DISPLAY`, so `sxmo_wm.sh display on` fails — but only *after*
+`transition()` has already written the new state to `$XDG_RUNTIME_DIR/sxmo.state`.
+The state file then disagrees with reality, and since `click()` walks *backwards*
+and wraps, pressing power turns the screen further off instead of on. Use
+`swaymsg` directly over ssh (SWAYSOCK *is* exported), or
+`export WAYLAND_DISPLAY=wayland-1` first.
+
+### ⚠️ peanutbutter is a touch-only `ext-session-lock-v1` client
+
+Do not launch `peanutbutter` by hand to see what it does. It is a real session
+lock (`ext_session_lock_manager_v1` / `get_lock_surface` / `unlock_and_destroy`),
+so the compositor stops rendering every other surface the moment it starts — a
+near-black screen with a clock is what it is *supposed* to look like.
+
+Its passcode is entered by **touches** (`--tries` is "the number of incorrect
+touches allowed", and `--deeplock` blocks unlocking entirely for a doubling
+timeout under `--paranoid`). It binds `wl_keyboard` and `wl_pointer` too, so a
+USB keyboard works; the power and volume keys do not.
+
+`pkill peanutbutter` does **not** unlock. `ext-session-lock-v1` requires the
+compositor to stay locked when the client dies without `unlock_and_destroy` —
+that is the point of the protocol. Restart the session instead:
+
+```sh
+sudo rc-service tinydm restart
+```
+
+Fonts are not the issue (dejavu and droid are installed), but the `Sxmo` family
+that `sxmo_hook_screenoff.sh` passes as `--font Sxmo` is **not** installed, so
+the lock status-line icons fall back to a substitute.
+
 ### ⚠️ Never `modprobe -r wlan` — it reboots the device
 
 qcacld-3.0's module exit path tears down the icnss2/wpss subsystem and hangs the
@@ -1213,12 +1337,18 @@ The port is done and reproducible. Remaining work, in the order I would do it:
 
 ### Worth upstreaming (independent of the port itself)
 
-Two are real bugs affecting other hardware, and neither needs the proprietary
+Three are real bugs affecting other hardware, and none needs the proprietary
 blobs:
 
-- **The touchscreen patch** (`tools/0001-touchpanel-*.patch`). Breaks touch
-  under Wayland on *every* oplus/OnePlus/Realme device using
-  `oplus_touchscreen_v2`.
+- **The touchscreen axis patch**
+  (`aports/linux-realme-lunaa/0001-touchpanel-*.patch`). Breaks touch under
+  Wayland on *every* oplus/OnePlus/Realme device using `oplus_touchscreen_v2`.
+- **The DSI UNBLANK patch**
+  (`aports/linux-realme-lunaa/0002-dsi-display-notify-UNBLANK-on-enable.patch`).
+  Kills touch after the first screen blank on the whole SM8350/SM7325 OPlus
+  display techpack, for any atomic-only compositor — i.e. every wlroots-based
+  UI since wlroots 0.18. Same root shape as the one above: the vendor's own
+  userspace papers over it, so nobody downstream ever sees it.
 - **The dwc3 peripheral-mode requirement** (§3). Any SM7325 downstream port
   looks completely dead without it — no USB, no way to see why.
 
