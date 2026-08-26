@@ -2,7 +2,7 @@
 maintainer="Abdullah AL-Swedi <abdullahfanar7@gmail.com>"
 pkgname=device-realme-lunaa
 pkgver=1
-pkgrel=5
+pkgrel=7
 pkgdesc="Realme GT Master Edition"
 url="https://postmarketos.org"
 arch="aarch64"
@@ -10,6 +10,7 @@ license="MIT"
 depends="
 	android-tools-mkbootimg
 	firmware-realme-lunaa
+	mesa-vulkan-freedreno
 	linux-realme-lunaa
 	postmarketos-base
 	postmarketos-base-downstream
@@ -21,9 +22,10 @@ source="
 	modules-initfs
 	lunaa-yupik.dtb
 	sxmo_deviceprofile.sh
-	10-pixman.sh
+	10-wlr-renderer.sh
 	lunaa-wifi-up.sh
 	lunaa-wifi.initd
+	90-lunaa-gpu.rules
 	"
 install="$pkgname.post-install $pkgname.post-upgrade"
 options="!archcheck !check"
@@ -40,14 +42,21 @@ package() {
 	install -Dm644 "$srcdir"/lunaa-yupik.dtb \
 		"$pkgdir"/boot/dtbs/lunaa-yupik.dtb
 
-	# Force software rendering for wlroots sessions. Not a preference: there
-	# is no working GL on this device.
-	install -Dm644 "$srcdir"/10-pixman.sh \
-		"$pkgdir"/usr/share/tinydm/env-wayland.d/10-pixman.sh
+	# Renderer for wlroots compositors. A hardware fact, not a UI preference,
+	# so it stays in the main package and applies to sway, phosh/phoc and
+	# anything else wlroots-based; mutter ignores it. See the file's header --
+	# it requires the local mesa aport.
+	install -Dm644 "$srcdir"/10-wlr-renderer.sh \
+		"$pkgdir"/usr/share/tinydm/env-wayland.d/10-wlr-renderer.sh
 
 	# WCN6750 wifi needs three manual steps at boot -- see the script.
 	install -Dm755 "$srcdir"/lunaa-wifi-up.sh "$pkgdir"/usr/bin/lunaa-wifi-up.sh
 	install -Dm755 "$srcdir"/lunaa-wifi.initd "$pkgdir"/etc/init.d/lunaa-wifi
+
+	# /dev/kgsl-3d0 and /dev/ion are root:root 0600 by default, which makes
+	# Vulkan root-only. Not a UI preference -- a property of this hardware.
+	install -Dm644 "$srcdir"/90-lunaa-gpu.rules \
+		"$pkgdir"/usr/lib/udev/rules.d/90-lunaa-gpu.rules
 }
 
 sxmo() {
@@ -69,7 +78,8 @@ sha512sums="
 e70bae17df23dcaaaea0e2d3616556f04baa23f8ee1357785c0f539bf97282d8ddff53953e155b72689bb73beb38c2da3d08de2a61e866684edfa10a6593885d  modules-initfs
 3e29010f3d709d6749a1928ce8784c8ffbf281d17af3f262faf7d8c6c7749ce2ef5827993792d12de127b930f71e4f20d3ed47cc83d58fab2d5f458c24d27ed2  lunaa-yupik.dtb
 cf948f29faf3f9279ea6d29e3d7da3a3987bf7cf8f00983561c72b9ba375c76217c4852d31ea02c7bd00cbbfc5326e5d65862fb6ccae8c041ec66aa145947788  sxmo_deviceprofile.sh
-95421f454d063d45286943d46538df33c08b88467a1cf728b048a957da1f2634143d6b1e161dffdd5bf83de40b8fbfe5597d13b725932baac192ee87b00c9604  10-pixman.sh
+85ebbbe7534ed3ba7afe47c7b3dbd01d3cb069e15d55dd3644ef0633085e135c580588440368492220afd2502f5d7bc56434394d23ae7e08afb557b327ddad20  10-wlr-renderer.sh
 007fd577694c6533883ba2fac1a35d473af82cea3f14be937c4eeaae9123c3f283be39d5968313a52b1df38b6d11845b288aec9016d7514f7c19a916d27cc8e3  lunaa-wifi-up.sh
 7612b22d1461384f530b1643c50474eb04cad962829bfc81450dcc4964376fa5932eaabb474b17751c58eb6e6742de822cb7b3cbd4ae5686a6e35d5ae0bd91b8  lunaa-wifi.initd
+ef50573595a2bf997c7cfc15f467394063c31c3e45ca5d4189a8e7027dc8957bcdadde242a909dc4698542ffb8201c9c2fe12076a5d6ce91b9cc56accf31209e  90-lunaa-gpu.rules
 "

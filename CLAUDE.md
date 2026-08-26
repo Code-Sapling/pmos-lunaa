@@ -506,41 +506,131 @@ export SXMO_SWAY_SCALE="3"
 Scale 3 gives 360x800 logical px, same as the Fairphone 4. Without it the UI is
 unusably small at 1080x2400.
 
-### No GPU acceleration — use `WLR_RENDERER=pixman`
+### Vulkan WORKS on the Adreno via KGSL (2026-08-26) — but the UI is still pixman
 
-Mesa has no driver for this Adreno: `eglInitialize` fails with
-`DRI2: failed to load driver`, zink then fails with no Vulkan ICD, and wlroots'
-vulkan renderer fails the same way. **Xorg segfaults** in glamor init because of
-this (`AccelMethod none` does not prevent it) — X11 UIs are effectively
-unusable. Sway works via `WLR_RENDERER=pixman` in
-`/usr/share/tinydm/env-wayland.d/10-pixman.sh`. Software rendering only.
+**Turnip runs on this device.** `vkprobe` (a bare instance, zero extensions)
+reports:
 
-**Why GPU acceleration cannot work as shipped (verified 2026-08-25):**
+```
+[0] Adreno 7c+ Gen 3
+    driver      : turnip Mesa driver (Mesa 26.1.6)
+    api version : 1.3.354
+    local heap  : 5465 MB
+    VK_KHR_external_memory_fd        : yes
+    VK_EXT_image_drm_format_modifier : yes
+```
 
-- The Adreno 642L is behind **KGSL** (`/dev/kgsl-3d0`), not a DRM GPU node.
-  `/dev/dri/renderD128` belongs to the *display* driver (`msm_drm`/SDE).
-- `MESA_LOADER_DRIVER_OVERRIDE=kgsl` does nothing: mesa's GL path goes through
-  GBM, which opens a DRM node. `kgsl_dri.so` exists but GBM cannot route to it.
-  KGSL support in mesa lives in **Turnip** (`tu_knl_kgsl.c`), the Vulkan driver.
-- **Alpine's `mesa-vulkan-freedreno` is built WITHOUT the KGSL backend.**
-  Confirmed by inspecting `/usr/lib/libvulkan_freedreno.so`: the string
-  `/dev/kgsl-3d0` is absent and there are 0 kgsl symbols (vs 16 msm/drm refs).
-  Turnip therefore probes only DRM devices:
+("Adreno 7c+ Gen 3" is the SC7280-family name; SM7325 is the same silicon.)
+
+What this took: a **local mesa aport** (`aports/mesa/`, → `pmaports/temp/mesa`)
+built with `-Dfreedreno-kmds=msm,kgsl,virtio`. Alpine builds `msm,virtio`, so
+turnip's KGSL backend is simply not in the binary. `strings
+libvulkan_freedreno.so | grep /dev/kgsl` settles which build you have in
+seconds — 0 hits means Alpine's.
+
+**`/dev/ion` is NOT a blocker** (the previous version of this section said it
+was). Missing ION is not even fatal — turnip only warns and drops
+`VK_KHR_external_memory_fd` (`tu_knl_kgsl.cc:1816`). And it works here anyway:
+mesa hardcodes `KGSL_ION_SYSTEM_HEAP_MASK = 1u << 25`, and the stock DTB has
+`/soc/qcom,ion/qcom,ion-heap@25` typed `MSM_SYSTEM`. Exact match, so dmabuf
+export works. `/dev/dma_heap/` does not exist; the ION fallback covers it.
+
+The kernel side needed nothing. Turnip hard-`goto fail`s if
+`KGSL_PROP_UCHE_GMEM_VADDR`, `KGSL_PROP_HIGHEST_BANK_BIT` or
+`KGSL_PROP_UBWC_MODE` are unsupported; all three are implemented at
+`drivers/gpu/msm/adreno.c:2495-2533`.
+
+**⚠️ Any tool that enables `VK_KHR_display` reports "no Vulkan devices".**
+`tu_knl_kgsl_load()` refuses to load in that case — its very first statement:
+
+```c
+if (instance->vk.enabled_extensions.KHR_display)
+   return vk_errorf(instance, VK_ERROR_INITIALIZATION_FAILED, "I can't KHR_display");
+```
+
+You get `ERROR_INITIALIZATION_FAILED` and "Failed to detect any valid GPUs",
+which looks exactly like a broken driver or a permissions problem. It is
+neither. This is upstream turnip's own design, not something the local patch
+introduced: `wsi_display` needs a DRM master fd for the GPU's own node, and
+KGSL has none, so it bails early rather than crash later.
+
+Two tools hit this, for different reasons:
+
+- **`vulkaninfo` always does.** It enables every instance extension it finds,
+  and there is no flag to stop it. Use `tools/vkprobe.c` instead — a bare
+  instance with zero extensions, which is the only way to exercise the KGSL
+  path. It also prints the DRM properties the patch below installs.
+- **`vkcube` does under its default `--wsi auto`** (`cube.c:4034`), which
+  enables `VK_KHR_display` *in addition to* the wayland surface extension.
+  **`vkcube --wsi wayland` works** — it skips that block entirely.
+
+### The compositor: solved by a local turnip patch (2026-08-26)
+
+`vkcube --wsi wayland` renders a spinning cube on the panel. That exercises the
+whole chain — turnip on KGSL, device selection, and dmabuf round-tripping
+between turnip's ION buffers and the SDE display driver.
+
+What blocked it: turnip **deliberately hides `VK_EXT_physical_device_drm` on
+KGSL** (`tu_device.cc:317`, `.EXT_physical_device_drm = !is_kgsl(...)`), because
+KGSL has no DRM node. But every consumer that pairs a Vulkan device with a DRM
+fd selects the GPU through exactly that extension:
+
+- wlroots 0.20 `render/vulkan/vulkan.c:351` matches `drmRenderMajor/Minor`,
+  logs `VK_EXT_physical_device_drm not supported`, so `WLR_RENDERER=vulkan`
+  fails.
+- zink `zink_screen.c:1707` does the same match in `zink_get_display_device()`
+  and leaves `screen->pdev` NULL. **No env var escapes this** —
+  `LIBGL_ALWAYS_SOFTWARE` only forces llvmpipe.
+
+It cascaded: no accelerated compositor → sway advertises no linux-dmabuf →
+GL/Vulkan clients cannot present either. One cause, three symptoms.
+
+`aports/mesa/0001-tu-kgsl-report-drm-properties-from-display-node.patch` scans
+`/dev/dri` and reports the display node's numbers as the GPU's own. Verified
+on hardware:
+
+```
+VK_EXT_physical_device_drm       : yes
+drmHasRender  : yes  render 226:128     <- /dev/dri/renderD128
+drmHasPrimary : yes  primary 226:0      <- /dev/dri/card0
+```
+
+Read the patch header before touching it: the association is a deliberate
+fiction (the GPU is not that DRM device), which is why it is not upstreamable
+as written.
+
+**Xorg still segfaults** in glamor init (`AccelMethod none` does not prevent
+it) — X11 UIs remain unusable.
+
+**Native GL over KGSL does not exist.** `src/freedreno/drm/` has only `msm/`
+and `virtio/` — KGSL lives solely in the Vulkan driver. GL would have to come
+from zink, which Alpine already builds into `mesa-dri-gallium`.
+
+### ⚠️ Building the mesa aport: two traps
+
+- **pmbootstrap's APKBUILD parser is static and never evaluates
+  `case "$CARCH"`.** Alpine's mesa adds `clang`, `libclc`,
+  `spirv-llvm-translator`, `rust` and `rust-bindgen` in the aarch64 arm; the
+  parser misses them, installs none, and then abuild *inside* the chroot does
+  evaluate the case and fails. Anything a build genuinely needs must go in the
+  plain `makedepends=` assignment. **Comments inside that quoted list also
+  defeat the parser** — keep them above it.
+- **Rust cannot be cross-compiled under crossdirect.** With crossdirect, meson
+  sees a *native* build and never passes `--target` to rustc, while
+  crossdirect's `rustc.sh` reads "no `--target`" as "this is a proc-macro,
+  build it for the build machine". Result:
 
   ```
-  TU: error: tu_knl.cc:406: device /dev/dri/renderD128 (msm_drm)
-      is not compatible with turnip (VK_ERROR_INCOMPATIBLE_DRIVER)
+  ld: src/nouveau/compiler/libnak_rs.a: error adding symbols: file in wrong format
   ```
 
-  Do not waste time on `TU_DEBUG`, permissions or env vars — the code is not
-  in the binary. Checking `strings ... | grep /dev/kgsl` takes seconds and
-  settles it.
-
-Enabling it would need a **local mesa aport** built with
-`-Dfreedreno-kmds=msm,kgsl`. Two further obstacles even then: `/dev/ion` is
-`root:root 0600` (Turnip's KGSL path allocates through ION on 5.4) and
-`/dev/dma_heap/` does not exist. Treat this as a separate project with an
-uncertain outcome, not a quick win.
+  (x86-64 objects, `EM: 62`, in an aarch64 link.) Forcing `--target` globally is
+  not a fix — the proc-macro crates really must be built for the build machine.
+  The aport therefore drops the only two Rust users, both useless here: nouveau
+  **Vulkan** (NVK's NAK compiler) and rusticl (OpenCL). Gallium nouveau stays;
+  only nouveau *Vulkan* needs Rust (`meson.build:836`). `libclc` is still
+  required on aarch64 regardless of rusticl — asahi, panfrost and imagination
+  all route through CLC (`meson.build:925`).
 
 ### ⚠️ Boot takes ~130s without capping the firmware timeout
 
@@ -743,9 +833,10 @@ Debugging tip: qcacld's own logs are suppressed by default. Load with
   (Venus) fail with `-2` (ENOENT); the blobs live on the `vendor` partition
   inside `super`, which is not mounted. Affects network offload and hardware
   video decode, not display. Extract to `/lib/firmware` to fix.
-- **GPU acceleration untested.** Display is KMS-only so far. The Adreno lives
-  behind KGSL (`/sys/class/kgsl`), not the mainline `msm` DRM GPU node, so mesa
-  needs its **kgsl** freedreno backend. Software rendering is the fallback.
+- **GPU acceleration works** (§4). Turnip on KGSL via the local mesa aport, plus
+  a turnip patch so wlroots and zink can select the device. `vkcube --wsi
+  wayland` renders on the panel. `90-lunaa-gpu.rules` in the device package
+  gives the `video` group access to `/dev/kgsl-3d0` and `/dev/ion`.
 
 ### Do not put `pmos.debug-shell` in `deviceinfo_kernel_cmdline`
 
@@ -1111,10 +1202,11 @@ The port is done and reproducible. Remaining work, in the order I would do it:
    module was produced, so `CONFIG_OPLUS_SM8350_CHARGER` is presumably built-in
    and failing to probe. Look at the `i2c_geni 984000.i2c: i2c error :-107`
    spam in dmesg — the charger may sit on that bus.
-3. **GPU acceleration.** Needs a local mesa aport built with
-   `-Dfreedreno-kmds=msm,kgsl`. `/dev/ion` being `root:root 0600` with no
-   `/dev/dma_heap` is a second obstacle behind it. See §4 — this only buys
-   smoother animation; it does not fix boot time or the UI.
+3. **GPU acceleration — done, but pin down what is left.** Vulkan and the
+   compositor both work (§4). Still open: confirm zink actually gives working
+   GL (`glmark2-es2-wayland`), and decide whether `WLR_RENDERER=vulkan` belongs
+   in the device package — if it does, note that it hard-depends on the patched
+   local mesa, and stock Alpine mesa would leave the device with no UI.
 4. **Camera.** `CONFIG_SPECTRA_CAMERA=n` was needed to compile (§5 Phase E).
    Re-enabling means fixing the `-mgeneral-regs-only` float errors in the ON
    Semi OIS firmware and ~50 undefined symbols from `CONFIG_SPECTRA_OPLUS`.

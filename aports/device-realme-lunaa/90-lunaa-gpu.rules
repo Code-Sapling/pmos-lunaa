@@ -1,0 +1,18 @@
+# GPU device nodes on realme-lunaa (SM7325 / Adreno 642L).
+#
+# Both default to root:root 0600, so Vulkan only works as root without this.
+# There is no upstream rule for either: the Adreno here is behind KGSL rather
+# than a DRM GPU node, so udev's 60-drm.rules never sees it, and /dev/ion is a
+# plain misc device.
+#
+# /dev/kgsl-3d0 -- the GPU itself. Turnip's KGSL backend opens this
+# (mesa src/freedreno/vulkan/tu_knl_kgsl.cc). Class "kgsl" is created by
+# drivers/gpu/msm/kgsl.c:4661.
+SUBSYSTEM=="kgsl", KERNEL=="kgsl-3d0", GROUP="video", MODE="0660"
+
+# /dev/ion -- turnip allocates *exportable* (dmabuf) buffers through ION on
+# this 5.4 kernel; /dev/dma_heap does not exist here. Without access, turnip
+# still initialises but silently drops VK_KHR_external_memory_fd, which is
+# what any compositor handoff would need. Registered as a misc device by
+# drivers/staging/android/ion/ion.c:493.
+SUBSYSTEM=="misc", KERNEL=="ion", GROUP="video", MODE="0660"
