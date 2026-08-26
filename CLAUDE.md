@@ -1247,6 +1247,24 @@ find it. **Always reflash `boot` + `vendor_boot` together with `userdata`.**
 `tools/build-images.sh` reads the cmdline out of boot-deploy's regenerated
 `vendor_boot.img`, so it always picks up the current UUIDs.
 
+**apk runs `.post-install` only on a fresh install, never on an upgrade.** On
+an upgrade it looks for `.post-upgrade` instead. `device-realme-lunaa` shipped
+only `.post-install`, so once an earlier revision was installed every later
+revision was an *upgrade* and `rc-update add lunaa-wifi default` never ran —
+the `lunaa-wifi` service was in the image but not in any runlevel, and wifi was
+dead at boot while `rc-service lunaa-wifi start` worked by hand. Both scripts
+are now shipped and identical (`install="$pkgname.post-install
+$pkgname.post-upgrade"`). Any future device-package service must do the same.
+
+Diagnose this entirely offline — no flash cycle:
+
+```sh
+ls ~/.local/var/pmbootstrap/chroot_rootfs_realme-lunaa/etc/runlevels/default/
+grep "Executing" ~/.local/var/pmbootstrap/log.txt | grep realme
+```
+
+An empty second command while other packages' scripts are listed is the tell.
+
 **The host's IP is not automatic without pmOS's `unudhcpd`.** With a rescue
 image that skips pmOS's init, the PC gets no DHCP lease; reflashing also
 recreates the netdev and drops any manual address. `ping` then fails before a

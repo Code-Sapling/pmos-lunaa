@@ -2,7 +2,7 @@
 maintainer="Abdullah AL-Swedi <abdullahfanar7@gmail.com>"
 pkgname=device-realme-lunaa
 pkgver=1
-pkgrel=4
+pkgrel=5
 pkgdesc="Realme GT Master Edition"
 url="https://postmarketos.org"
 arch="aarch64"
@@ -25,7 +25,7 @@ source="
 	lunaa-wifi-up.sh
 	lunaa-wifi.initd
 	"
-install="$pkgname.post-install"
+install="$pkgname.post-install $pkgname.post-upgrade"
 options="!archcheck !check"
 
 build() {
@@ -70,6 +70,6 @@ e70bae17df23dcaaaea0e2d3616556f04baa23f8ee1357785c0f539bf97282d8ddff53953e155b72
 3e29010f3d709d6749a1928ce8784c8ffbf281d17af3f262faf7d8c6c7749ce2ef5827993792d12de127b930f71e4f20d3ed47cc83d58fab2d5f458c24d27ed2  lunaa-yupik.dtb
 cf948f29faf3f9279ea6d29e3d7da3a3987bf7cf8f00983561c72b9ba375c76217c4852d31ea02c7bd00cbbfc5326e5d65862fb6ccae8c041ec66aa145947788  sxmo_deviceprofile.sh
 95421f454d063d45286943d46538df33c08b88467a1cf728b048a957da1f2634143d6b1e161dffdd5bf83de40b8fbfe5597d13b725932baac192ee87b00c9604  10-pixman.sh
-d568a21ca372607de1d0d02a8ef1ab802d2ac3b428774f9ddf413099b91a5183aa325eca1851c65a733ee343d2c0f8f5221761a78726955f7c2d2674c2f47cd6  lunaa-wifi-up.sh
+007fd577694c6533883ba2fac1a35d473af82cea3f14be937c4eeaae9123c3f283be39d5968313a52b1df38b6d11845b288aec9016d7514f7c19a916d27cc8e3  lunaa-wifi-up.sh
 7612b22d1461384f530b1643c50474eb04cad962829bfc81450dcc4964376fa5932eaabb474b17751c58eb6e6742de822cb7b3cbd4ae5686a6e35d5ae0bd91b8  lunaa-wifi.initd
 "

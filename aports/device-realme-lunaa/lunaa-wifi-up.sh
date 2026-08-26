@@ -17,6 +17,14 @@
 # loads and wlan0 appears. Backgrounded so it cannot delay boot either way.
 WCN=/sys/devices/platform/soc/17a10040.qcom,wcn6750/wpss_boot
 
+# icnss2 is built-in, so this normally exists already -- but wait a little
+# anyway rather than exiting silently, which is indistinguishable from the
+# service never having run at all.
+i=0
+while [ ! -w "$WCN" ] && [ $i -lt 20 ]; do
+	sleep 1
+	i=$((i + 1))
+done
 [ -w "$WCN" ] || exit 0
 echo 1 > "$WCN" 2>/dev/null || exit 0
 sleep 5
