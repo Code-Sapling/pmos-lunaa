@@ -4,4 +4,5 @@
 # without it, anyone who already had an older revision installed never got
 # the service enabled and wifi silently did not come up at boot.
 rc-update add lunaa-wifi default
+rc-update add lunaa-adsp default
 exit 0

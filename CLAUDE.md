@@ -901,6 +901,66 @@ function.
 (`finalinit.c` — forces dwc3 peripheral mode and caps the firmware timeout),
 the touchscreen kernel patch, and `rescue-shell.c`.
 
+### Battery WORKS — the ADSP has to be booted first
+
+`/sys/class/power_supply/` is empty on a fresh boot, and the reason is not a
+missing or broken charger driver. **Nothing on the application processor
+measures the battery on this device.** Charging and gauge data come from
+firmware running on the **ADSP** and are read over `pmic_glink`.
+
+The chain, all verified in the source:
+
+1. `drivers/power/oplus/v1/charger_ic/oplus_battery_sm8350.c` — the driver
+   `CONFIG_OPLUS_SM8350_CHARGER=y` actually builds — registers the
+   `battery`/`usb`/`wls` supplies in `battery_chg_init_psy()` (`:3201`), but
+   only after `pmic_glink_register_client()` (`:9524`) succeeds in probe.
+2. `pmic_glink` binds to an rpmsg channel named **`PMIC_RTR_ADSP_APPS`**
+   (`drivers/soc/qcom/pmic_glink.c:547`) — an ADSP glink edge.
+3. No ADSP → no edge → no channel → probe never completes → the directory is
+   *empty* rather than full of wrong values. An empty directory is the tell.
+
+Note both `qti_battery_charger.c:2125` and the oplus driver claim compatible
+`qcom,battery-charger`; two devices exist and each takes one. The oplus one wins
+the platform node and works; the QTI one gets the `pmic_glink` child and logs
+`battery psy not found`. That message is normal here, not a failure.
+
+**The missing step.** `techpack/audio/dsp/adsp-loader.c` creates
+`/sys/kernel/boot_adsp/boot` (0220) and never boots anything itself — its probe
+ends at
+
+```c
+wqueue:
+	INIT_WORK(&adsp_ldr_work, adsp_load_fw);
+	return 0;
+```
+
+which *initialises* the work and never schedules it. Only a userspace write of
+`1` (`BOOT_CMD`) reaches `adsp_boot_store()` → `adsp_loader_do()` →
+`subsystem_get("adsp")`. Android's audio HAL does that write. Exactly the same
+shape as the qcacld `ON` trigger — read the driver, not the symptom (§11).
+
+```sh
+echo 1 > /sys/kernel/boot_adsp/boot
+```
+
+Automated by `lunaa-adsp-up.sh` + the `lunaa-adsp` OpenRC service in
+`device-realme-lunaa`. Needs `adsp.mdt` + `adsp.b*` in `/lib/firmware`, shipped
+by `firmware-realme-lunaa`.
+
+Confirmed on hardware — the whole subsystem comes up in ~2s:
+
+```
+subsys-pil-tz 3700000.qcom,lpass: adsp: Brought out of reset
+adsp-loader soc:qcom,msm-adsp-loader: adsp_load_fw: Q6/ADSP image is loaded
+apr_tal_rpmsg soc:adsp.apr_audio_svc.-1.-1: Channel[apr_audio_svc] state[Up]
+BATTERY_CHG: battery_chg_probe: battery_chg_probe start... / end...
+```
+
+and `/sys/class/power_supply/` then holds `battery`, `usb`, `wireless`.
+
+This is also the Q6 **audio** DSP, so booting it is a prerequisite for the
+audio path generally, not just for the battery.
+
 ### Wifi WORKS — three manual steps Android does and pmOS does not
 
 `wlan0` comes up, NetworkManager/nmtui sees networks, apk and curl work over it.
@@ -949,10 +1009,10 @@ Debugging tip: qcacld's own logs are suppressed by default. Load with
   be deleted. Until then `boot-deploy`'s own images do **not** boot.
 - `CONFIG_SPECTRA_CAMERA=n` — the camera subsystem is disabled to get the kernel
   to build (§5 Phase E). No camera.
-- **No battery/charging.** `/sys/class/power_supply/` is empty. No charger
-  module was produced, so `CONFIG_OPLUS_SM8350_CHARGER` is presumably built-in
-  and failing to probe — note the `i2c_geni 984000.i2c: i2c error :-107` spam in
-  dmesg, which may be the same bus.
+- **Battery/charging — SOLVED,** see the ADSP section above. It needed one
+  userspace write, not a driver fix. (The `i2c_geni 984000.i2c: i2c error :-107`
+  spam that this document previously fingered is unrelated — nothing in the
+  battery path touches I2C.)
 - **Vendor firmware missing.** `yupik_ipa_fws.mdt` (IPA) and `vpu20_1v.mdt`
   (Venus) fail with `-2` (ENOENT); the blobs live on the `vendor` partition
   inside `super`, which is not mounted. Affects network offload and hardware
@@ -1322,10 +1382,12 @@ The port is done and reproducible. Remaining work, in the order I would do it:
    initramfs hook in `device-realme-lunaa`, after which plain `boot-deploy`
    output would boot and `build-images.sh` could be dropped. This is the single
    change that would make the port upstreamable.
-2. **Battery / charging.** `/sys/class/power_supply/` is empty. No charger
-   module was produced, so `CONFIG_OPLUS_SM8350_CHARGER` is presumably built-in
-   and failing to probe. Look at the `i2c_geni 984000.i2c: i2c error :-107`
-   spam in dmesg — the charger may sit on that bus.
+2. **Battery / charging — done.** `lunaa-adsp-up.sh` boots the ADSP; see the
+   ADSP section in §4. What is left is cosmetic: the charger logs
+   `Count temp_curr_monitor_table failed, rc = -22` (a DT property it wants and
+   this board does not provide) and occasional
+   `battery_chg_write: Error, timed out sending message`, which so far has not
+   stopped the readings from working.
 3. **GPU acceleration — done, but pin down what is left.** Vulkan and the
    compositor both work (§4). Still open: confirm zink actually gives working
    GL (`glmark2-es2-wayland`), and decide whether `WLR_RENDERER=vulkan` belongs

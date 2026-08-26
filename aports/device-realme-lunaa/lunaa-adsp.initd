@@ -1,0 +1,14 @@
+#!/sbin/openrc-run
+description="Boot the ADSP (enables battery/charging via pmic_glink, and audio)"
+
+depend() {
+	need localmount
+}
+
+start() {
+	ebegin "Booting ADSP (backgrounded)"
+	# Backgrounded: the PIL load and the charger probe take a few seconds
+	# and nothing else in the boot needs to wait for them.
+	/usr/bin/lunaa-adsp-up.sh >/dev/null 2>&1 &
+	eend 0
+}

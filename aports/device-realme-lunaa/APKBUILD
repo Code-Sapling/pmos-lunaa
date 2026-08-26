@@ -2,7 +2,7 @@
 maintainer="Abdullah AL-Swedi <abdullahfanar7@gmail.com>"
 pkgname=device-realme-lunaa
 pkgver=1
-pkgrel=8
+pkgrel=9
 pkgdesc="Realme GT Master Edition"
 url="https://postmarketos.org"
 arch="aarch64"
@@ -25,6 +25,8 @@ source="
 	10-wlr-renderer.sh
 	lunaa-wifi-up.sh
 	lunaa-wifi.initd
+	lunaa-adsp-up.sh
+	lunaa-adsp.initd
 	90-lunaa-gpu.rules
 	"
 install="$pkgname.post-install $pkgname.post-upgrade"
@@ -52,6 +54,11 @@ package() {
 	# WCN6750 wifi needs three manual steps at boot -- see the script.
 	install -Dm755 "$srcdir"/lunaa-wifi-up.sh "$pkgdir"/usr/bin/lunaa-wifi-up.sh
 	install -Dm755 "$srcdir"/lunaa-wifi.initd "$pkgdir"/etc/init.d/lunaa-wifi
+
+	# Battery and charging come from firmware on the ADSP, over pmic_glink.
+	# Nothing boots the ADSP without a userspace write -- see the script.
+	install -Dm755 "$srcdir"/lunaa-adsp-up.sh "$pkgdir"/usr/bin/lunaa-adsp-up.sh
+	install -Dm755 "$srcdir"/lunaa-adsp.initd "$pkgdir"/etc/init.d/lunaa-adsp
 
 	# /dev/kgsl-3d0 and /dev/ion are root:root 0600 by default, which makes
 	# Vulkan root-only. Not a UI preference -- a property of this hardware.
@@ -81,5 +88,7 @@ ce94137082067f3f53965efa388fe68605f29b626da70ad1df8a61a07acf258057f107e32da4a663
 85ebbbe7534ed3ba7afe47c7b3dbd01d3cb069e15d55dd3644ef0633085e135c580588440368492220afd2502f5d7bc56434394d23ae7e08afb557b327ddad20  10-wlr-renderer.sh
 007fd577694c6533883ba2fac1a35d473af82cea3f14be937c4eeaae9123c3f283be39d5968313a52b1df38b6d11845b288aec9016d7514f7c19a916d27cc8e3  lunaa-wifi-up.sh
 7612b22d1461384f530b1643c50474eb04cad962829bfc81450dcc4964376fa5932eaabb474b17751c58eb6e6742de822cb7b3cbd4ae5686a6e35d5ae0bd91b8  lunaa-wifi.initd
+f4810b9b35f184eda4a1f93412c2984c269734ee4809d22bd19c109150ab598c16b297cb8442cfd3e073bc1a92e9970c5849582f77ee2845b5e500905f2c4bc5  lunaa-adsp-up.sh
+2b8607c6f8aff79fbe2f38c2fe62e54405fd744b96a198cef7ae48f6a7406e984cc306e65918e33d27b228e022222e0f42008503926669b24c696a64a46be9e7  lunaa-adsp.initd
 ef50573595a2bf997c7cfc15f467394063c31c3e45ca5d4189a8e7027dc8957bcdadde242a909dc4698542ffb8201c9c2fe12076a5d6ce91b9cc56accf31209e  90-lunaa-gpu.rules
 "
